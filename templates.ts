@@ -50,12 +50,15 @@ tailwind.config = {
 };
 </script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang TC', 'Noto Sans TC', 'Segoe UI', sans-serif; }
 .md { line-height: 1.8; }
-.md pre { background:#3a342e; color:#f3ece2; padding:0.85rem 1rem; border-radius:0.5rem; overflow-x:auto; font-size:0.85rem; line-height:1.6; margin:0.6rem 0; }
+.md pre { background:#2a2520 !important; color:#f3ece2; padding:0.9rem 1.1rem; border-radius:0.5rem; overflow-x:auto; font-size:0.85rem; line-height:1.6; margin:0.7rem 0; border:1px solid #3a342e; }
 .md code { background:#f3ece2; color:#5a544c; padding:0.1rem 0.4rem; border-radius:0.25rem; font-size:0.9em; }
-.md pre code { background:transparent; padding:0; color:inherit; }
+.md pre code { background:transparent !important; padding:0; color:inherit; }
+.md pre code.hljs { background:transparent !important; padding:0; }
 .md p { margin: 0.5rem 0; }
 .md ul { list-style: disc; padding-left: 1.5rem; margin: 0.5rem 0; }
 .md ol { list-style: decimal; padding-left: 1.5rem; margin: 0.5rem 0; }
@@ -76,11 +79,48 @@ dd { line-height: 1.8; }
 </header>
 ${body}
 </div>
+<div id="loading-overlay" class="hidden fixed inset-0 bg-ink-900/40 flex items-center justify-center z-50 backdrop-blur-sm">
+<div class="bg-paper rounded-xl shadow-2xl px-8 py-10 max-w-sm mx-4 text-center border border-cream-200">
+<div class="inline-block w-14 h-14 border-4 border-sage-500 border-t-transparent rounded-full animate-spin"></div>
+<h2 class="text-lg font-semibold mt-5 text-ink-900">AI 正在評估中</h2>
+<p class="text-sm text-ink-500 mt-2 leading-relaxed">抓取 README 並交給 Gemini 分析<br>通常需要 10-30 秒，請稍候</p>
+</div>
+</div>
 <script>
 document.querySelectorAll('.md').forEach(function (el) {
   var raw = el.textContent || '';
   if (raw.trim()) el.innerHTML = marked.parse(raw);
 });
+if (window.hljs) {
+  document.querySelectorAll('.md pre code').forEach(function (block) {
+    try { hljs.highlightElement(block); } catch (e) {}
+  });
+}
+(function () {
+  var overlay = document.getElementById('loading-overlay');
+  if (!overlay) return;
+  document.querySelectorAll('.js-loading-form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      overlay.classList.remove('hidden');
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn) {
+        btn.setAttribute('data-original-text', btn.textContent || '');
+        btn.disabled = true;
+        btn.textContent = '評估中...';
+      }
+    });
+  });
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted) {
+      overlay.classList.add('hidden');
+      document.querySelectorAll('.js-loading-form button[type="submit"]').forEach(function (btn) {
+        btn.disabled = false;
+        var orig = btn.getAttribute('data-original-text');
+        if (orig !== null) btn.textContent = orig;
+      });
+    }
+  });
+})();
 </script>
 </body>
 </html>`;
@@ -115,10 +155,10 @@ ${recent
 <section class="bg-paper rounded-lg shadow-soft p-8 border border-cream-200">
 <h1 class="text-2xl font-bold mb-2 text-ink-900">貼上 GitHub URL，30 秒內拿到完整分析</h1>
 <p class="text-ink-500 mb-6">輸入專案連結，AI 會幫你產出概覽、用法、評分卡與行動建議。</p>
-<form id="eval-form" action="/evaluate" method="post" class="space-y-4">
+<form action="/evaluate" method="post" class="js-loading-form space-y-4">
 <input type="url" name="url" required placeholder="https://github.com/owner/repo"
   class="w-full bg-cream-50 border border-cream-200 text-ink-700 placeholder-ink-400 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-sage-400 focus:border-sage-400 transition" />
-<button type="submit" id="eval-submit"
+<button type="submit"
   class="w-full bg-sage-500 hover:bg-sage-600 disabled:bg-sage-300 disabled:cursor-not-allowed text-white font-medium py-3 rounded-lg transition">
   開始評估
 </button>
@@ -126,34 +166,6 @@ ${recent
 <p class="text-xs text-ink-400 mt-4">同樣的 URL 重複貼會直接回傳之前的結果，不會多花 API 費用。</p>
 </section>
 ${recentHtml}
-
-<div id="loading-overlay" class="hidden fixed inset-0 bg-ink-900/40 flex items-center justify-center z-50 backdrop-blur-sm">
-<div class="bg-paper rounded-xl shadow-2xl px-8 py-10 max-w-sm mx-4 text-center border border-cream-200">
-<div class="inline-block w-14 h-14 border-4 border-sage-500 border-t-transparent rounded-full animate-spin"></div>
-<h2 class="text-lg font-semibold mt-5 text-ink-900">AI 正在評估中</h2>
-<p class="text-sm text-ink-500 mt-2 leading-relaxed">抓取 README 並交給 Gemini 分析<br>通常需要 10-30 秒，請稍候</p>
-</div>
-</div>
-
-<script>
-(function () {
-  var form = document.getElementById('eval-form');
-  var btn = document.getElementById('eval-submit');
-  var overlay = document.getElementById('loading-overlay');
-  form.addEventListener('submit', function () {
-    overlay.classList.remove('hidden');
-    btn.disabled = true;
-    btn.textContent = '評估中...';
-  });
-  window.addEventListener('pageshow', function (e) {
-    if (e.persisted) {
-      overlay.classList.add('hidden');
-      btn.disabled = false;
-      btn.textContent = '開始評估';
-    }
-  });
-})();
-</script>
 `,
   );
 }
@@ -181,6 +193,25 @@ export function reportPage(ev: Evaluation): string {
     )
     .join("");
 
+  const detailsHtml =
+    data.details && data.details.length > 0
+      ? `
+<section class="bg-paper rounded-lg shadow-soft p-6 border border-cream-200">
+<h2 class="text-lg font-semibold mb-4 text-ink-900">📖 詳細內容<span class="text-sm font-normal text-ink-400 ml-2">（${data.details.length} 項）</span></h2>
+<div class="space-y-5">
+${data.details
+  .map(
+    (item, i) => `
+<div class="${i > 0 ? "pt-5 border-t border-cream-200" : ""}">
+<h3 class="font-semibold text-ink-900 text-base mb-2 flex items-baseline gap-2"><span class="text-sage-500 text-sm font-mono">${String(i + 1).padStart(2, "0")}</span>${escapeHtml(item.title)}</h3>
+<div class="md text-ink-700 text-sm pl-7">${escapeHtml(item.body)}</div>
+</div>`,
+  )
+  .join("")}
+</div>
+</section>`
+      : "";
+
   return layout(
     `${ev.repo_name} - 評估報告`,
     `
@@ -190,7 +221,16 @@ export function reportPage(ev: Evaluation): string {
 <div class="min-w-0 flex-1">
 <h1 class="text-2xl font-bold break-all text-ink-900">${escapeHtml(ev.repo_name)}</h1>
 <a href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" class="text-sm text-sage-700 hover:underline break-all">${escapeHtml(ev.url)}</a>
-<div class="text-xs text-ink-400 mt-1">評估於 ${escapeHtml(ev.created_at)}</div>
+<div class="text-xs text-ink-400 mt-1">${
+      ev.updated_at && ev.updated_at !== ev.created_at
+        ? `最後評估於 ${escapeHtml(ev.updated_at)} · 收藏於 ${escapeHtml(ev.created_at)}`
+        : `評估於 ${escapeHtml(ev.created_at)}`
+    }</div>
+<form action="/evaluate" method="post" class="js-loading-form mt-3">
+<input type="hidden" name="url" value="${escapeHtml(ev.url)}" />
+<input type="hidden" name="force" value="1" />
+<button type="submit" class="text-xs text-sage-700 hover:text-sage-600 hover:underline cursor-pointer">↻ 重新評估</button>
+</form>
 </div>
 <div class="text-right shrink-0">
 <div class="text-5xl font-bold ${scoreColor(ev.total_score)}">${ev.total_score}<span class="text-xl text-ink-300"> / 60</span></div>
@@ -203,8 +243,8 @@ export function reportPage(ev: Evaluation): string {
 <h2 class="text-lg font-semibold mb-4 text-ink-900">📌 專案概覽</h2>
 <dl class="space-y-3 text-sm">
 <div><dt class="font-medium text-ink-500">一句話描述</dt><dd class="mt-1 text-ink-700">${escapeHtml(data.overview.one_liner)}</dd></div>
-<div><dt class="font-medium text-ink-500">核心問題</dt><dd class="mt-1 text-ink-700">${escapeHtml(data.overview.problem)}</dd></div>
-<div><dt class="font-medium text-ink-500">適合誰用</dt><dd class="mt-1 text-ink-700">${escapeHtml(data.overview.target_user)}</dd></div>
+<div><dt class="font-medium text-ink-500">核心問題</dt><dd class="mt-1 md text-ink-700">${escapeHtml(data.overview.problem)}</dd></div>
+<div><dt class="font-medium text-ink-500">適合誰用</dt><dd class="mt-1 md text-ink-700">${escapeHtml(data.overview.target_user)}</dd></div>
 </dl>
 </section>
 
@@ -234,6 +274,7 @@ export function reportPage(ev: Evaluation): string {
 <div><dt class="font-medium text-ink-500">最終建議</dt><dd class="mt-1 md text-ink-700">${escapeHtml(data.supplement.final_advice)}</dd></div>
 </dl>
 </section>
+${detailsHtml}
 </article>
 `,
   );

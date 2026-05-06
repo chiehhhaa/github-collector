@@ -8,6 +8,7 @@ export interface Evaluation {
   recommend: string;
   analysis_json: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface AnalysisData {
@@ -34,6 +35,7 @@ export interface AnalysisData {
     pairs_with: string;
     final_advice: string;
   };
+  details?: Array<{ title: string; body: string }>;
 }
 
 const db = new Database("evaluations.db");
@@ -46,9 +48,21 @@ db.exec(`
     total_score INTEGER NOT NULL,
     recommend TEXT NOT NULL,
     analysis_json TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+// Migration: 既有 DB 補上 updated_at 欄位（舊資料以 created_at 回填）
+const cols = db.query("PRAGMA table_info(evaluations)").all() as Array<{
+  name: string;
+}>;
+if (!cols.some((c) => c.name === "updated_at")) {
+  db.exec("ALTER TABLE evaluations ADD COLUMN updated_at DATETIME");
+  db.exec(
+    "UPDATE evaluations SET updated_at = created_at WHERE updated_at IS NULL",
+  );
+}
 
 export function findByUrl(url: string): Evaluation | null {
   return db
@@ -80,6 +94,21 @@ export function insert(data: {
     [data.url, data.repo_name, data.total_score, data.recommend, data.analysis_json],
   );
   return Number(result.lastInsertRowid);
+}
+
+export function update(
+  id: number,
+  data: {
+    repo_name: string;
+    total_score: number;
+    recommend: string;
+    analysis_json: string;
+  },
+): void {
+  db.run(
+    "UPDATE evaluations SET repo_name = ?, total_score = ?, recommend = ?, analysis_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+    [data.repo_name, data.total_score, data.recommend, data.analysis_json, id],
+  );
 }
 
 export function getRecommendLevel(totalScore: number): string {

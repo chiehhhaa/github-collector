@@ -6,6 +6,7 @@ import {
   getRecommendLevel,
   insert,
   listAll,
+  update,
 } from "./db.ts";
 import { fetchReadme, parseGitHubUrl } from "./github.ts";
 import { analyzeRepo, calculateTotal } from "./ai.ts";
@@ -58,6 +59,7 @@ console.log(
 async function handleEvaluate(req: Request): Promise<Response> {
   const form = await req.formData();
   const inputUrl = String(form.get("url") || "").trim();
+  const force = String(form.get("force") || "") === "1";
   if (!inputUrl) return html(errorPage("請輸入 GitHub URL"), 400);
 
   let parsed;
@@ -68,7 +70,7 @@ async function handleEvaluate(req: Request): Promise<Response> {
   }
 
   const cached = findByUrl(parsed.normalizedUrl);
-  if (cached) {
+  if (cached && !force) {
     console.log(
       `[evaluate] cache hit: ${parsed.owner}/${parsed.repo} → id=${cached.id}`,
     );
@@ -79,21 +81,29 @@ async function handleEvaluate(req: Request): Promise<Response> {
   const readme = await fetchReadme(parsed.owner, parsed.repo);
 
   console.log(
-    `[evaluate] analyzing with Claude (readme ${readme.length} chars)...`,
+    `[evaluate] analyzing with Gemini (readme ${readme.length} chars)...`,
   );
   const repoFullName = `${parsed.owner}/${parsed.repo}`;
   const analysis = await analyzeRepo(readme, repoFullName);
   const total = calculateTotal(analysis.scores);
   const recommend = getRecommendLevel(total);
 
-  const id = insert({
-    url: parsed.normalizedUrl,
+  const payload = {
     repo_name: repoFullName,
     total_score: total,
     recommend,
     analysis_json: JSON.stringify(analysis),
-  });
+  };
 
+  if (cached) {
+    update(cached.id, payload);
+    console.log(
+      `[evaluate] updated id=${cached.id} score=${total} (${recommend})`,
+    );
+    return redirect(`/result/${cached.id}`);
+  }
+
+  const id = insert({ url: parsed.normalizedUrl, ...payload });
   console.log(`[evaluate] saved id=${id} score=${total} (${recommend})`);
   return redirect(`/result/${id}`);
 }
