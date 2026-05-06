@@ -1,4 +1,6 @@
 import type { AnalysisData } from "./db.ts";
+import type { ExternalContent } from "./github.ts";
+import { filterRelevantLinks } from "./github.ts";
 
 const MODEL = "gemini-2.5-flash";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
@@ -27,56 +29,45 @@ const SYSTEM_PROMPT = `【最高優先規則】
     * 工具類 repo：每個主要功能或指令一條
   每條格式為 { title, body }：
     * title: 該項目的名稱（短，noun phrase）
-    * body: 200-500 字繁體中文 markdown，可含 \`\`\`code block\`\`\`、列表、連結
+    * body: **精簡 60-120 字**繁體中文 markdown。重點是讓使用者快速理解「這項是什麼、何時用」，不要長篇大論複述 README。可含程式碼範例（用三反引號 fenced block）。
   如果 README 沒有可拆分的原子內容（例如純粹是專案介紹），回傳空陣列 []。
   不要為了湊數而拆，寧可少一點也要每條都有實際資訊。
 
-【列表格式規則（很重要）】
-以下情況**必須**用 markdown bullet list（每行以 `- ` 開頭），**不要**寫成「A、B、C」這種逗號串接的段落：
-- target_user 列舉多種目標使用者時（例如：前端工程師、後端開發者、學生）
-- use_cases 列舉多個使用情境時
-- alternatives 列舉多個替代工具時
-- pairs_with 列舉多個搭配工具時
-- final_advice 包含多個獨立建議或行動步驟時
-- details[].body 列舉指令、API、Skills、子功能等時
+【列表與多步驟格式】
 
-判斷標準：**內容有 3 個以上獨立項目時，一律用 bullet list**。1-2 個項目可以用段落。
-指令、code snippet 一律用 \`\`\`bash 或 \`\`\`js 等 code block 包裹，不要散在段落裡。
+列舉 3 個以上項目時用 markdown 列表，**每項單獨一行**：
 
-【install / example 多步驟格式（很重要）】
-**單一指令**直接用 code block：
+正確的多項列舉：
+
+- 前端工程師
+- 後端開發者
+- 資料工程師
+
+正確的多步驟安裝（每步驟一行，code 用三反引號 fenced block）：
+
+1. 安裝套件：
 \`\`\`bash
 npm install foo
 \`\`\`
 
-**多步驟必須用 markdown 編號列表，每一步單獨一行（步驟之間用換行 \\n 分隔）**，例如：
-
-1. 安裝套件：
-   \`\`\`bash
-   npm install foo
-   \`\`\`
 2. 初始化：
-   \`\`\`bash
-   npx foo init
-   \`\`\`
-3. 設定環境變數：複製 \`.env.example\` 為 \`.env\` 並填入金鑰
-4. 啟動：
-   \`\`\`bash
-   npx foo start
-   \`\`\`
+\`\`\`bash
+npx foo init
+\`\`\`
 
-❌ 禁止把多步驟塞成單行（例如「1. 安裝… 2. 初始化… 3. 設定…」全擠在一段）。每個編號後面**必須**有換行。
+3. 啟動：
+\`\`\`bash
+npm run dev
+\`\`\`
 
-【關於 JSON 字串中的換行】
-你輸出的是 JSON，markdown 的換行在 JSON 字串裡必須是字元 \`\\n\`（反斜線 + n）。例如：
+錯誤（擠成一行 + 用單反引號包多行 code）：
 
-正確（JSON 字串包含 \\n escape）：
-"use_cases": "1. 平行化代理：同時跑多個 AI agent\\n2. 程式碼審查：讓 agent 在沙盒中實作\\n3. 自動化 Git 流程：管理分支與提交"
+1. 安裝：\`bash npm install foo\` 2. 初始化：\`npx foo init\`
 
-錯誤（用空格串起來，沒換行）：
-"use_cases": "1. 平行化代理：同時跑多個 AI agent 2. 程式碼審查：讓 agent 實作 3. 自動化 Git 流程"
-
-對 use_cases、alternatives、pairs_with、final_advice、target_user、details[].body、install、example 這些欄位，**列表項目之間必須用 \\n 分隔**，不可省略換行。
+【關鍵規則】
+- 多行程式碼**永遠用三反引號 fenced block**（\`\`\`bash...\`\`\`），**禁止**用單反引號 \`...\` 包多行內容
+- 列表項目之間要視覺上分行（按 enter 換行），**不要**在文字裡寫 "\\n" 或 "\\\\n" 這種逃脫字元給使用者看到
+- 適用欄位：use_cases、alternatives、pairs_with、final_advice、target_user、details[].body、install、example
 
 【評分標準（皆為 1-10 整數）】
 - practicality 實用性：能否解決實際問題
@@ -101,12 +92,12 @@ const RESPONSE_SCHEMA = {
         problem: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。3 個以上痛點時用 markdown 編號列表（1. 2. 3.），每項用 \\n 分隔。",
+            "繁體中文 markdown。3 個以上痛點時用編號列表（1. 2. 3.），每項換行。",
         },
         target_user: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。3 種以上使用者時必須用 bullet list（每行 - 開頭，用 \\n 分隔）。例：- 前端工程師\\n- 後端開發者\\n- 資料工程師",
+            "繁體中文 markdown。3 種以上使用者時用 bullet list（每行 - 開頭，項目間換行，不要用『、』串接）。",
         },
       },
       required: ["one_liner", "problem", "target_user"],
@@ -117,17 +108,17 @@ const RESPONSE_SCHEMA = {
         install: {
           type: "string",
           description:
-            "繁體中文 markdown。指令必須用**三個反引號的 fenced code block**包裹（例：\\n```bash\\nnpm install foo\\n```\\n）。**嚴禁使用單一反引號的 inline code**（如 `npm install foo`）。多步驟用 1. 2. 3. 編號列表，步驟間用 \\n 分隔。",
+            "繁體中文 markdown。多步驟用編號列表（1. 2. 3.），每步驟單獨一行。指令必須用三反引號 fenced code block 包裹（```bash 開頭, ``` 結尾），絕對禁止用單反引號 ` 包多行內容。",
         },
         example: {
           type: "string",
           description:
-            "繁體中文 markdown。程式碼必須用**三個反引號的 fenced code block**包裹（例：\\n```ts\\nimport { foo } from 'bar';\\nfoo();\\n```\\n）。**嚴禁把多行程式碼寫成單一反引號的 inline code**。",
+            "繁體中文 markdown。所有多行程式碼都用三反引號 fenced code block 包裹（```ts/```js/```bash 開頭, ``` 結尾），絕對禁止用單反引號 ` 包多行。",
         },
         use_cases: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。3 個以上場景時必須用編號列表（1. 2. 3.），每項用 \\n 分隔。",
+            "繁體中文 markdown。3 個以上場景時用編號列表（1. 2. 3.），每項單獨一行。",
         },
       },
       required: ["install", "example", "use_cases"],
@@ -157,17 +148,17 @@ const RESPONSE_SCHEMA = {
         alternatives: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。3 個以上替代工具時必須用 bullet list（- 開頭，\\n 分隔）。",
+            "繁體中文 markdown。3 個以上替代工具時用 bullet list（每行 - 開頭，項目間換行）。",
         },
         pairs_with: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。3 個以上搭配工具時必須用 bullet list（- 開頭，\\n 分隔）。",
+            "繁體中文 markdown。3 個以上搭配工具時用 bullet list（每行 - 開頭，項目間換行）。",
         },
         final_advice: {
           type: "string",
           description:
-            "繁體中文 markdown 內容。多項建議時用 bullet 或編號列表，項目間用 \\n 分隔。",
+            "繁體中文 markdown。多項建議時用 bullet 或編號列表，每項單獨一行。",
         },
       },
       required: ["alternatives", "pairs_with", "final_advice"],
@@ -185,7 +176,7 @@ const RESPONSE_SCHEMA = {
           body: {
             type: "string",
             description:
-              "繁體中文 markdown 200-500 字。指令/程式碼必須用**三個反引號的 fenced code block**包裹（```bash ... ``` 或 ```ts ... ```），嚴禁用單一反引號 inline。列舉 3 項以上時用 - bullet 或 1. 編號，每項 \\n 分隔。",
+              "**精簡 60-120 字**繁體中文 markdown。重點是「這項是什麼、何時用」，不要長篇大論。指令/程式碼用三反引號 fenced block 包裹，禁止單反引號包多行。列舉項目時每項單獨一行。",
           },
         },
         required: ["title", "body"],
@@ -204,9 +195,85 @@ interface GeminiResponse {
   error?: { message?: string };
 }
 
+export async function extractRelevantLinks(
+  readme: string,
+  repoFullName: string,
+): Promise<string[]> {
+  const apiKey = Bun.env.GEMINI_API_KEY;
+  if (!apiKey) return [];
+
+  const prompt = `你會收到一份 GitHub 專案的 README。判斷這個 README 是否完整描述了專案的安裝、使用、功能。如果 README 簡略、有大量「請見官網」「see docs」這類引導，請從 README 中找出最多 3 條值得跟進的官方連結，回傳純 URL 字串陣列。
+
+優先選擇：
+- 官方文件首頁、quickstart、getting started
+- 官方產品/公司網站
+- API reference / 完整使用指南
+
+避免選擇：
+- github.com 內部連結（已抓 README）
+- 社群（Twitter / X / Discord / YouTube / LinkedIn）
+- npm 套件頁
+- 第三方 blog / 教學文
+
+如果 README 已經內容完整、不需要外部資料（例如 awesome-* 清單、README 已含完整安裝跟範例），直接回傳空陣列 []。
+寧可少選也不亂選。
+
+專案：${repoFullName}
+
+README：
+---
+${readme.slice(0, MAX_README_CHARS)}
+---`;
+
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "object",
+            properties: {
+              links: {
+                type: "array",
+                maxItems: 3,
+                items: { type: "string" },
+              },
+            },
+            required: ["links"],
+          },
+          temperature: 0.1,
+        },
+      }),
+    });
+    if (!res.ok) {
+      console.warn(`[phase1] Gemini ${res.status}, fall back to no external content`);
+      return [];
+    }
+    const json = (await res.json()) as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+    };
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return [];
+    const parsed = JSON.parse(text) as { links?: unknown };
+    const raw = Array.isArray(parsed.links) ? parsed.links : [];
+    const strs = raw.filter((u): u is string => typeof u === "string");
+    return filterRelevantLinks(strs);
+  } catch (e) {
+    console.warn(`[phase1] failed, falling back: ${(e as Error).message}`);
+    return [];
+  }
+}
+
 export async function analyzeRepo(
   readme: string,
   repoFullName: string,
+  external: ExternalContent[] = [],
 ): Promise<AnalysisData> {
   const apiKey = Bun.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -216,6 +283,16 @@ export async function analyzeRepo(
   }
 
   const truncated = readme.slice(0, MAX_README_CHARS);
+
+  const externalSection =
+    external.length > 0
+      ? `\n\n以下是 README 中提到的外部官方文件內容（從相關連結抓取，請優先使用這些實際資料而非你的訓練記憶）：\n\n${external
+          .map(
+            (e) => `========== ${e.url} ==========\n${e.content}`,
+          )
+          .join("\n\n")}`
+      : "";
+
   const fullPrompt = `${SYSTEM_PROMPT}
 
 ===
@@ -226,9 +303,13 @@ export async function analyzeRepo(
 
 ---
 ${truncated}
----
+---${externalSection}
 
-請依照上方規則產生 JSON 評估報告。**所有 string 欄位的內容必須使用繁體中文**，即使 README 是英文也一樣。`;
+請依照上方規則產生 JSON 評估報告。**所有 string 欄位的內容必須使用繁體中文**，即使 README 或外部文件是英文也一樣。${
+    external.length > 0
+      ? "\n安裝方式、使用範例、詳細內容等欄位請以**外部官方文件**為主要依據，README 只是入口。"
+      : ""
+  }`;
 
   const res = await fetch(API_URL, {
     method: "POST",
@@ -281,11 +362,45 @@ ${truncated}
   return parsed;
 }
 
-// 安全網：模型偶爾會把「1. xxx。 2. yyy。 3. zzz」串成一行不換行
+// 安全網 1: 模型有時會在輸出裡寫字面 "\n"（反斜線+n），讓使用者看到逃脫字元
+function unescapeLiteralNewlines(text: string): string {
+  if (!text) return text;
+  return text.replace(/\\n/g, "\n");
+}
+
+// 安全網 2: 模型有時用單反引號包多行內容並渲染成 inline code，例如：
+//   `bash\nnpm install\n`     ← lang 黏在開頭反引號後
+//   `\nbash\nnpm install\n`   ← lang 在第一行內容
+// 兩種都要轉成三反引號 fenced block
+function fixBrokenCodeFences(text: string): string {
+  if (!text) return text;
+  return text.replace(
+    /(?<!`)`([a-z][a-z0-9_+#-]{0,11})?[ \t]*\n([\s\S]*?)\n[ \t]*`(?!`)/gi,
+    (_match, langOnOpen: string | undefined, content: string) => {
+      let lang = langOnOpen ?? "";
+      let body = content;
+      // 如果開頭沒帶 lang，檢查內容第一行是否是 lang hint
+      if (!lang) {
+        const lines = body.split("\n");
+        const firstLine = lines[0]?.trim() ?? "";
+        if (/^[a-z][a-z0-9_+#-]{0,11}$/i.test(firstLine)) {
+          lang = firstLine;
+          body = lines.slice(1).join("\n");
+        }
+      }
+      // 前後加 \n 確保 fenced block 跟周圍內容分隔乾淨
+      return "\n```" + lang + "\n" + body.trim() + "\n```\n";
+    },
+  );
+}
+
+// 安全網 3: 模型偶爾會把「1. xxx。 2. yyy。 3. zzz」串成一行不換行
 function fixInlineNumberedList(text: string): string {
   if (!text) return text;
+  // Pass 0: 行首多餘空白移除（避免 markdown 把 "  2. xxx" 解成段落延續）
+  let result = text.replace(/^[ \t]+(\d+\.\s)/gm, "$1");
   // Pass 1: 標點符號 + 數字. 之間補換行（最安全）
-  let result = text.replace(
+  result = result.replace(
     /([。.！!？?：:；;])[ \t]*(\d+\.\s)/g,
     "$1\n$2",
   );
@@ -309,22 +424,27 @@ function fixInlineNumberedList(text: string): string {
   return result;
 }
 
+function cleanMarkdown(text: string): string {
+  let r = unescapeLiteralNewlines(text);
+  r = fixBrokenCodeFences(r);
+  r = fixInlineNumberedList(r);
+  // 收斂連續 3+ 個換行為 2 個（避免清洗後產生過大空白）
+  r = r.replace(/\n{3,}/g, "\n\n");
+  return r;
+}
+
 function postProcessMarkdown(data: AnalysisData): void {
-  data.overview.problem = fixInlineNumberedList(data.overview.problem);
-  data.overview.target_user = fixInlineNumberedList(data.overview.target_user);
-  data.how_to_use.install = fixInlineNumberedList(data.how_to_use.install);
-  data.how_to_use.example = fixInlineNumberedList(data.how_to_use.example);
-  data.how_to_use.use_cases = fixInlineNumberedList(data.how_to_use.use_cases);
-  data.supplement.alternatives = fixInlineNumberedList(
-    data.supplement.alternatives,
-  );
-  data.supplement.pairs_with = fixInlineNumberedList(data.supplement.pairs_with);
-  data.supplement.final_advice = fixInlineNumberedList(
-    data.supplement.final_advice,
-  );
+  data.overview.problem = cleanMarkdown(data.overview.problem);
+  data.overview.target_user = cleanMarkdown(data.overview.target_user);
+  data.how_to_use.install = cleanMarkdown(data.how_to_use.install);
+  data.how_to_use.example = cleanMarkdown(data.how_to_use.example);
+  data.how_to_use.use_cases = cleanMarkdown(data.how_to_use.use_cases);
+  data.supplement.alternatives = cleanMarkdown(data.supplement.alternatives);
+  data.supplement.pairs_with = cleanMarkdown(data.supplement.pairs_with);
+  data.supplement.final_advice = cleanMarkdown(data.supplement.final_advice);
   if (data.details) {
     for (const item of data.details) {
-      item.body = fixInlineNumberedList(item.body);
+      item.body = cleanMarkdown(item.body);
     }
   }
 }

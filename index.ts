@@ -8,8 +8,12 @@ import {
   listAll,
   update,
 } from "./db.ts";
-import { fetchReadme, parseGitHubUrl } from "./github.ts";
-import { analyzeRepo, calculateTotal } from "./ai.ts";
+import {
+  fetchExternalContent,
+  fetchReadme,
+  parseGitHubUrl,
+} from "./github.ts";
+import { analyzeRepo, calculateTotal, extractRelevantLinks } from "./ai.ts";
 import { errorPage, historyPage, homePage, reportPage } from "./templates.ts";
 
 const port = Number(Bun.env.PORT) || 3000;
@@ -79,12 +83,31 @@ async function handleEvaluate(req: Request): Promise<Response> {
 
   console.log(`[evaluate] fetching README: ${parsed.owner}/${parsed.repo}`);
   const readme = await fetchReadme(parsed.owner, parsed.repo);
-
-  console.log(
-    `[evaluate] analyzing with Gemini (readme ${readme.length} chars)...`,
-  );
   const repoFullName = `${parsed.owner}/${parsed.repo}`;
-  const analysis = await analyzeRepo(readme, repoFullName);
+
+  console.log(`[evaluate] phase 1: scanning README for external links...`);
+  const links = await extractRelevantLinks(readme, repoFullName);
+
+  let external: Awaited<ReturnType<typeof fetchExternalContent>> = [];
+  if (links.length > 0) {
+    console.log(
+      `[evaluate] phase 1: found ${links.length} link(s) → ${links.join(", ")}`,
+    );
+    console.log(`[evaluate] phase 2: fetching external content in parallel...`);
+    external = await fetchExternalContent(links);
+    console.log(
+      `[evaluate] phase 2: fetched ${external.length}/${links.length} page(s)`,
+    );
+  } else {
+    console.log(`[evaluate] phase 1: README looks self-contained, skipping`);
+  }
+
+  const totalChars =
+    readme.length + external.reduce((sum, e) => sum + e.content.length, 0);
+  console.log(
+    `[evaluate] analyzing with Gemini (${totalChars} chars total, ${external.length} external source(s))...`,
+  );
+  const analysis = await analyzeRepo(readme, repoFullName, external);
   const total = calculateTotal(analysis.scores);
   const recommend = getRecommendLevel(total);
 
