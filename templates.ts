@@ -1,4 +1,4 @@
-import type { AnalysisData, Evaluation } from "./db.ts";
+import type { AnalysisData, Evaluation, User } from "./db.ts";
 
 export function escapeHtml(s: string): string {
   return String(s ?? "")
@@ -9,6 +9,25 @@ export function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+const TAIPEI_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Taipei",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatTaipei(utcStr: string | null | undefined): string {
+  if (!utcStr) return "";
+  // SQLite 給的是 "YYYY-MM-DD HH:MM:SS"（UTC），補成 ISO 才能正確 parse
+  const d = new Date(utcStr.replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return utcStr;
+  return TAIPEI_FORMATTER.format(d);
+}
+
 function scoreColor(score: number): string {
   if (score >= 50) return "text-score-excellent";
   if (score >= 40) return "text-score-good";
@@ -17,7 +36,27 @@ function scoreColor(score: number): string {
   return "text-score-bad";
 }
 
-function layout(title: string, body: string): string {
+function userWidget(user: User | null): string {
+  if (user && user.github_id) {
+    const avatar = user.github_avatar_url
+      ? `<img src="${escapeHtml(user.github_avatar_url)}" alt="" class="w-6 h-6 rounded-full inline-block" />`
+      : "";
+    const display = escapeHtml(user.github_login || "user");
+    return `
+<div class="flex items-center gap-2 text-sm">
+${avatar}
+<span class="text-ink-700 hidden sm:inline">${display}</span>
+<a href="/logout" class="text-ink-400 hover:text-sage-700 hover:underline">登出</a>
+</div>`;
+  }
+  return `
+<a href="/login" class="text-sm flex items-center gap-1.5 text-sage-700 hover:text-sage-600 hover:underline">
+<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+<span>用 GitHub 登入</span>
+</a>`;
+}
+
+function layout(title: string, body: string, user: User | null): string {
   return `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -70,12 +109,15 @@ dd { line-height: 1.8; }
 </head>
 <body class="bg-cream-50 min-h-screen text-ink-700 leading-relaxed">
 <div class="max-w-4xl mx-auto px-4 py-8">
-<header class="mb-8 flex items-center justify-between border-b border-cream-200 pb-4">
-<a href="/" class="text-xl font-bold text-ink-900">📦 GitHub Repo 評估收藏</a>
+<header class="mb-8 flex items-center justify-between border-b border-cream-200 pb-4 gap-4 flex-wrap">
+<a href="/" class="text-xl font-bold text-ink-900 shrink-0">📦 GitHub Repo 評估收藏</a>
+<div class="flex items-center gap-4 ml-auto">
 <nav class="space-x-4 text-sm">
 <a href="/" class="text-sage-700 hover:underline">首頁</a>
 <a href="/history" class="text-sage-700 hover:underline">歷史紀錄</a>
 </nav>
+${userWidget(user)}
+</div>
 </header>
 ${body}
 </div>
@@ -126,7 +168,7 @@ if (window.hljs) {
 </html>`;
 }
 
-export function homePage(recent: Evaluation[]): string {
+export function homePage(recent: Evaluation[], user: User | null): string {
   const recentHtml =
     recent.length === 0
       ? ""
@@ -139,8 +181,8 @@ ${recent
     (e) => `
 <li class="px-4 py-3 flex items-center justify-between hover:bg-cream-50 transition">
 <div class="min-w-0">
-<a href="/result/${e.id}" class="font-medium text-sage-700 hover:underline truncate block">${escapeHtml(e.repo_name)}</a>
-<div class="text-xs text-ink-400 mt-0.5">${escapeHtml(e.created_at)} · ${escapeHtml(e.recommend)}</div>
+<a href="/result/${e.seq}" class="font-medium text-sage-700 hover:underline truncate block">${escapeHtml(e.repo_name)}</a>
+<div class="text-xs text-ink-400 mt-0.5">${escapeHtml(formatTaipei(e.created_at))} · ${escapeHtml(e.recommend)}</div>
 </div>
 <div class="text-2xl font-bold ${scoreColor(e.total_score)} shrink-0 ml-4">${e.total_score}</div>
 </li>`,
@@ -148,6 +190,11 @@ ${recent
   .join("")}
 </ul>
 </section>`;
+
+  const loginHint =
+    !user || !user.github_id
+      ? `<p class="text-xs text-ink-400 mt-2">提示：用 GitHub 登入後，收藏會永久保存（不會因清 cookie 或換裝置消失）。</p>`
+      : "";
 
   return layout(
     "首頁 - GitHub Repo 評估收藏",
@@ -164,13 +211,15 @@ ${recent
 </button>
 </form>
 <p class="text-xs text-ink-400 mt-4">同樣的 URL 重複貼會直接回傳之前的結果，不會多花 API 費用。</p>
+${loginHint}
 </section>
 ${recentHtml}
 `,
+    user,
   );
 }
 
-export function reportPage(ev: Evaluation): string {
+export function reportPage(ev: Evaluation, user: User | null): string {
   const data = JSON.parse(ev.analysis_json) as AnalysisData;
   const scoreEntries: Array<[string, number]> = [
     ["實用性", data.scores.practicality],
@@ -223,8 +272,8 @@ ${data.details
 <a href="${escapeHtml(ev.url)}" target="_blank" rel="noopener" class="text-sm text-sage-700 hover:underline break-all">${escapeHtml(ev.url)}</a>
 <div class="text-xs text-ink-400 mt-1">${
       ev.updated_at && ev.updated_at !== ev.created_at
-        ? `最後評估於 ${escapeHtml(ev.updated_at)} · 收藏於 ${escapeHtml(ev.created_at)}`
-        : `評估於 ${escapeHtml(ev.created_at)}`
+        ? `最後評估於 ${escapeHtml(formatTaipei(ev.updated_at))} · 收藏於 ${escapeHtml(formatTaipei(ev.created_at))}`
+        : `評估於 ${escapeHtml(formatTaipei(ev.created_at))}`
     }</div>
 <form action="/evaluate" method="post" class="js-loading-form mt-3">
 <input type="hidden" name="url" value="${escapeHtml(ev.url)}" />
@@ -277,10 +326,11 @@ ${data.details
 ${detailsHtml}
 </article>
 `,
+    user,
   );
 }
 
-export function historyPage(list: Evaluation[]): string {
+export function historyPage(list: Evaluation[], user: User | null): string {
   const body =
     list.length === 0
       ? `<div class="bg-paper rounded-lg shadow-soft p-8 text-center text-ink-500 border border-cream-200">還沒有評估紀錄。<a href="/" class="text-sage-700 hover:underline">回首頁開始第一筆</a></div>`
@@ -300,10 +350,10 @@ ${list
   .map(
     (e) => `
 <tr class="hover:bg-cream-50 transition">
-<td class="px-4 py-3"><a href="/result/${e.id}" class="text-sage-700 font-medium hover:underline">${escapeHtml(e.repo_name)}</a></td>
+<td class="px-4 py-3"><a href="/result/${e.seq}" class="text-sage-700 font-medium hover:underline">${escapeHtml(e.repo_name)}</a></td>
 <td class="px-4 py-3 text-center font-bold ${scoreColor(e.total_score)}">${e.total_score}</td>
 <td class="px-4 py-3 text-ink-700">${escapeHtml(e.recommend)}</td>
-<td class="px-4 py-3 text-ink-400 text-xs">${escapeHtml(e.created_at)}</td>
+<td class="px-4 py-3 text-ink-400 text-xs">${escapeHtml(formatTaipei(e.created_at))}</td>
 </tr>`,
   )
   .join("")}
@@ -316,10 +366,11 @@ ${list
 <h1 class="text-xl font-bold mb-4 text-ink-900">歷史評估紀錄（${list.length}）</h1>
 ${body}
 `,
+    user,
   );
 }
 
-export function errorPage(message: string): string {
+export function errorPage(message: string, user: User | null): string {
   return layout(
     "發生錯誤",
     `
@@ -330,5 +381,6 @@ export function errorPage(message: string): string {
 <a href="/" class="inline-block bg-sage-500 hover:bg-sage-600 text-white px-5 py-2 rounded-lg transition">回首頁</a>
 </div>
 `,
+    user,
   );
 }
